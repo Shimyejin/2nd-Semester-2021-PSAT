@@ -1,0 +1,23 @@
+## 디렉토리 설정 
+setwd("C:/Users/jy991/바탕 화면/2021 2학기/패키지/1주차 패키지")  ## 본인의 디렉토리로 변경하세요.
+
+# 패키지 불러오기 -- 아래의 패키지 이외에는 부르지 말아주세요! 
+library(tidyverse)
+library(magrittr)
+library(data.table)
+library(ggpubr)
+library(corrplot)
+library(caret)
+library(Metrics)
+
+# 데이터 불러오기 
+cus_info <- fread("2_cus_info.csv",
+                  header=TRUE, 
+                  data.table = FALSE,
+                  stringsAsFactors = FALSE,
+                  na.strings = c("_", "-"))
+
+act_info <- fread("2_act_info.csv",
+                  header=TRUE,
+                  data.table = FALSE,
+                  stringsAsFactors = FALSE)

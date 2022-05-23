@@ -1,0 +1,354 @@
+---
+title: "Untitled"
+author: "Ko"
+date: '2021 10 5 '
+output: html_document
+---
+
+# 필요한 패키지
+```{r message=FALSE, warning=FALSE}
+packages = c("tidyverse", "progress", "data.table", "lubridate", "httr", "jsonlite")
+
+package.check <- lapply(
+  packages,
+  FUN = function(x) {
+    if (!require(x, character.only = TRUE)) {
+      install.packages(x, dependencies = TRUE)
+      library(x, character.only = TRUE)
+    }
+  }
+)
+```
+
+# 변수 및 데이터 저장
+```{r}
+# API KEY 넣기
+kart_key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50X2lkIjoiOTQwMTAyNjc3IiwiYXV0aF9pZCI6IjQiLCJ0b2tlbl90eXBlIjoiQWNjZXNzVG9rZW4iLCJzZXJ2aWNlX2lkIjoiNDMwMDExMzkzIiwiWC1BcHAtUmF0ZS1MaW1pdCI6IjIwMDAwOjEwIiwibmJmIjoxNjM0NjQ4NjgxLCJleHAiOjE2OTc3MjA2ODEsImlhdCI6MTYzNDY0ODY4MX0.xC6ObMpstlqYwr2T5eXWBf2pD8qCfH9GnS0IKLZpD_c"
+
+# 메타 데이터 파일 (고유 코드 : 실제 이름 대응) 
+matchType_df = jsonlite::fromJSON('gameType.json') # 매치 종류 (스피드 팀전, 아이템 팀전 등)
+
+# etc
+varnames = c("partsEngine","partsHandle","partsWheel","partsKit","rankinggrade2","matchRank","matchRetired","matchWin","matchTime")
+```
+
+
+# 함수 정의
+
+## 유저 정보 받아오기
+- 유저 코드 입력하면 유저 정보(코드, 닉네임, 레벨) 반환
+```{r}
+# 개별 유저
+getUserInfo = function(user_id){
+  
+  data = GET(url = str_c('https://api.nexon.co.kr/kart/v1.0/users/',user_id), # Base URL
+             add_headers(Authorization = kart_key)) %>%          # REST API Key
+    content(as = 'text') %>% 
+    fromJSON() %>% as_tibble()
+  
+  return(data)
+}
+
+# 유저 코드 전체 입력하면 유저 정보 반환
+getAllUserInfo = function(user_id_lst, verbose = T){
+  
+  user_id_lst = unique(user_id_lst)
+  
+  cat(str_c("총 ",length(user_id_lst), "개의 유저 정보 추출 중....\n"))
+  cat(str_c("예상 소요 시간 : ", (length(user_id_lst) * .075) %/% 60, "분 ", (length(user_id_lst) * .075) %% 60,"초 안팎\n"))
+  
+  if (verbose == T){
+    pb = progress_bar$new(total = length(user_id_lst))
+  }
+  
+  data = NULL
+  
+  for (user_id in user_id_lst){
+    tmp_data = getUserInfo(user_id)
+    data = rbindlist(list(data,tmp_data))
+    if(exists("pb")) pb$tick()
+  }
+  
+  data = data %>% dplyr::select(-name)
+  return(data)
+}
+```
+
+
+## 매치 정보 받아오기
+- 매치 리스트 뽑기 위해 날짜 데이터 `YYYY-MM-DD HH:MM:SS` 생성하는 함수
+```{r}
+# "min_interval" 분 단위로 날짜가 뽑힙니다 (기본값 30분, 30분 단위). 
+# 2020-01-01 00:00:01, 2020-01-01 00:30:01, 2020-01-01 01:00:01, ... 이런 식 
+makeDate = function(start_date, duration, min_interval = 30){
+    
+    # start_date : 시작 날짜
+    # duration : 뽑을 기간 (단위:일)
+    # min_interval : 뽑을 분 간격 단위
+    
+    present_date = lubridate::as_datetime(start_date) + 1
+    s = 60 / min_interval
+    indicator = duration * s * 24
+    now = 0
+    date_lst = c(as.character(present_date))
+    
+    while (now <= indicator){
+        present_date = lubridate::as_datetime(present_date) + min_interval*60 # min_interval분 단위로 시간 더함
+        date_lst = c(date_lst, as.character(present_date)) # 출력할 변수에 저장
+        now = now + 1
+    }
+    return(date_lst)
+    
+}
+```
+
+- 매치 데이터 불러오는 함수, 한번에 최대 200개까지만 불러올 수 있음
+```{r}
+# from : 검색 시작 일시 (YYYY-MM-DD HH:MM:SS)
+# to : 검색 종료 일시 (YYYY-MM-DD HH:MM:SS)
+getMatchCode = function(from, to){
+
+    # raw 매치 기록 불러오기 
+    data = GET(url = 'https://api.nexon.co.kr/kart/v1.0/matches/all?', # base URL
+               query = list(start_date = from, # 검색 시작 일시
+                            end_date = to,   # 검색 종료 일시
+                            limit = "500"),                     # 최대 몇 개 검색할지 200 고정
+            add_headers(Authorization = kart_key)) %>%          # REST API Key
+        content(as = 'text') %>% 
+        fromJSON()
+    
+    # 매치 종류 한글로 바꾸기
+    tryCatch({
+      data = left_join(data$matches, matchType_df, by = c("matchType" = "id")) %>%
+        select(-matchType) %>% 
+        # 매치 종류 구분하는 열 추가
+        mutate(개인전 = ifelse(str_detect(name, "개인"),1,0), # 개인 or 팀 구분
+               스피드전 = ifelse(str_detect(name, "스피드"),1,0)) # 스피드전 or 아이템전 구분
+      return(data)
+      },
+    error = function(e) return(NULL))
+}
+```
+
+- 시작 날짜와 기간 입력하면 매치 리스트 뽑는 함수 (위 두 함수 엮어서)
+```{r}
+getAllMatchCode = function(start_date, duration, min_interval = 30){
+    cat("매치 코드 수집 중.....\n")
+    # 뽑을 매치 기간 날짜 리스트 생성
+    date_lst = makeDate(start_date=start_date, duration = duration, min_interval = min_interval)
+    pb = progress_bar$new(total = length(date_lst))
+    
+    # return할 데이터 프레임 선언
+    all_match_lst_df = NULL
+    
+    for (d in 1:length(date_lst)){
+        one_match_data = getMatchCode(from = date_lst[d], to = date_lst[d+1])
+        all_match_lst_df = rbindlist(list(all_match_lst_df, one_match_data))
+        pb$tick()
+    }
+    # 매치 코드 담긴 리스트 리턴
+    return(all_match_lst_df)
+    
+}
+```
+
+- 개인전 매치 기록
+```{r}
+getIndivMatchInfo = function(match_code){
+  
+  # 예외처리
+  tryCatch({
+    
+    # 개별 매치 불러오기
+    data = GET(url = str_c('https://api.nexon.co.kr/kart/v1.0/matches/',match_code),
+               add_headers(Authorization = kart_key)) %>% 
+      content(as = 'text') %>% 
+      fromJSON()
+          
+    # 개인전 매치 정보
+    indiv_match_info_tb = as_tibble(data) %>% select(-players)
+          
+    # 개인전 매치 플레이어 정보
+    indiv_players_info_tb = data$players
+          
+    # 합치기
+    data = cbind(indiv_match_info_tb,indiv_players_info_tb)
+    
+    # 유저 레벨 받아와서 합치기
+    #user_id_lst = data$accountNo
+    #user_info_tb = getAllUserInfo(user_id_lst)
+    data = data %>% 
+      #mutate(characterLevel = user_info_tb$level,
+      #       .after = "characterName") %>%
+      mutate_at(all_of(varnames), as.numeric)
+    
+    data$teamNo = 0
+    
+    return(data)
+  }, error = function(e) return(NULL))
+}
+```
+
+- 팀전 매치 기록
+```{r}
+getTeamMatchInfo = function(match_code){
+  
+  # 예외처리
+  tryCatch({
+    # 개별 매치 불러오기
+    data = GET(url = str_c('https://api.nexon.co.kr/kart/v1.0/matches/',match_code),
+    add_headers(Authorization = kart_key)) %>% 
+                  content(as = 'text') %>% 
+                  fromJSON()
+              
+    # 팀전 매치 정보
+    team_match_info_tb = as_tibble(data) %>% select(-teams)
+    team_match_info_tb = team_match_info_tb[1,]
+    
+    # 팀전 매치 플레이어 정보
+    team1_players_info_tb = data$teams$players[[1]] %>% mutate(teamNo = 1)
+    team2_players_info_tb = data$teams$players[[2]] %>% mutate(teamNo = 2)
+    team_players_info_tb = rbindlist(list(team1_players_info_tb,team2_players_info_tb))
+    remove(team1_players_info_tb, team2_players_info_tb)
+                
+    # 합치기
+    data = cbind(team_match_info_tb, team_players_info_tb)
+    
+    # 유저 레벨 받아와서 합치기
+    #user_id_lst = data$accountNo
+    #user_info_tb = getAllUserInfo(user_id_lst)
+    data = data %>% 
+      #mutate(characterLevel = user_info_tb$level,
+      #       .after = "characterName") %>% 
+      mutate_at(all_of(varnames), as.numeric)
+    
+    return(data)
+  }, error = function(e) return(NULL))
+}
+
+```
+
+
+- 매치 종류에 상관 없이 매치 기록 반환 (사용 X)
+```{r}
+getMatchInfo_ = function(match_code){
+
+  tryCatch({
+    return(getIndivMatchInfo(match_code))
+  },
+  error = function(e){
+    tryCatch({
+      return(getTeamMatchInfo(match_code))
+      },
+      error = function(e) return(NULL)
+      )})
+}
+```
+
+
+- 매치 코드 전체 넣으면 전체 매치 기록 반환
+```{r}
+getAllMatchInfo = function(match_code_df){
+  
+  n = length(match_code_df$matches %>% unlist %>% as.vector)
+  
+  # 안내문
+  cat(str_c("총 ", n, " 개의 매치 데이터 수집 중.....\n"))
+  cat(str_c("예상 소요 시간 : ", 
+            (n * .1) %/% 60, "분", 
+            round((n * .1) %% 60, 0),"초",
+            " 안팎\n"))
+  
+  # 개인전/팀전 구분
+  indiv_match_code_lst = match_code_df %>% 
+    filter(개인전 == 1) %>%
+    select(matches) %>%
+    unlist %>% as.vector
+  team_match_code_lst = match_code_df %>% 
+    filter(개인전 == 0) %>%
+    select(matches) %>%
+    unlist %>% as.vector
+  
+  # 전체 매치 개수
+  n = length(indiv_match_code_lst) + length(team_match_code_lst)
+  pb = progress_bar$new(total = n) # progress_bar
+  
+  data = NULL
+  
+  for (code in indiv_match_code_lst){
+    tmp_data = getIndivMatchInfo(code)
+    data = rbindlist(list(data,tmp_data))
+    pb$tick()
+  }
+  
+  for (code in team_match_code_lst){
+    tmp_data = getTeamMatchInfo(code)
+    data = rbindlist(list(data,tmp_data))
+    pb$tick()
+  }
+  
+  return(data)
+}
+```
+
+## 전부 통합
+- 날짜, 기간, 분간격 입력하면 그때의 매치 데이터 반환 (사용 X)
+```{r}
+getKartMatchData_ = function(start_date, duration, min_interval = 30){
+
+  cat("매치 코드 수집 중.....\n")
+  matchcode_df = getAllMatchCode(start_date, duration, min_interval)
+  match_code_lst = matchcode_df$matches %>% unlist %>% as.vector
+  cat(str_c("총 ", length(match_code_lst), " 개의 매치 데이터 수집 중.....\n"))
+  cat(str_c("예상 소요 시간 : ", (length(match_code_lst) * .15) %/% 60, "분", (length(match_code_lst) * .15) %% 60,"초 안팎\n"))
+  data = getAllMatchInfo(match_code_lst) %>%
+    mutate_all(na_if, "") # 빈칸 -> NA
+  
+  return(data)
+}
+```
+
+
+- 날짜, 기간, 분간격 입력하면 그때의 매치 데이터 반환
+- 개인전/팀전 처음부터 구분하기 (`if`문으로)
+```{r}
+getKartMatchData = function(start_date, duration, min_interval = 30){
+  
+  # 매치 코드 수집
+  match_code_df = getAllMatchCode(start_date, duration, min_interval)
+  data = getAllMatchInfo(match_code_df) %>%
+    mutate_all(na_if, "") # 빈칸 -> NA
+  
+  return(data)
+}
+```
+
+
+*데이터 설명*
+이 데이터 하나는 총 8명(row가 8개)이 참여한 아이템 개인전 경기 기록 
+- channelName : 게임 내 채널 고유명
+- endTime : 경기 종료 일시 (전부 다 같은 걸로 봐선 마지막 주자가 들어오거나 리타이어 할 때 쯤의 시간인 듯)
+- gameSpeed : 게임 시 설정하는 전반적인 속도 (각 숫자가 뭘 의미하는지는 찾아봐야 함)
+- matchId : 해당 매치 검색할 때 썼던 고유 코드
+- matchResult : 모름
+- matchType : 매치 종류 (고유 코드임, 무슨 매치인지 매칭 시켜줄 수 있음, 이 경우에는 아이템 개인전)
+- playTime : 플레이 타임, 1등 기록 + 10초
+- StartTime : 경기 시작 일시
+- trackId : 트랙(경기장) 종류 (이것도 고유 코드, 매칭 가능)
+------------------------------------------------------------------------------여기까지 매치 정보
+------------------------------------------------------------------------------아래로는 개별 플레이어 정보
+- accountNo : 계정 고유 코드
+- characterName : 유저 닉네임 (좀 이상한 플레이어 이름 나올 수도 있음)
+- character : 유저가 해당 경기에서 사용했던 캐릭터 (고유 코드, 매칭 가능)
+- level : 유저 레벨
+- kart : 유저가 해당 경기에서 사용했던 카트 (고유 코드, 매칭 가능)
+- license : 라이센스인데 모름..
+- pet : 유저가 해당 경기에서 사용했던 펫 (고유 코드, 매칭 가능)
+- flyingPet : 유저가 해당 경기에서 사용했던 플라잉 펫 (고유 코드, 매칭 가능)
+- parts붙은 다섯개 : 카트에 부착하는 파츠 같은 건데 각 숫자가 뭘 의미하는지는 모름
+- rankinggrade2 : 리뉴얼 라이센스 (음... 실력 같은 거 가늠하는 객관적인 지표? 정도로 생각하면 될 듯. 근데 각 숫자가 어떤 라이센스인지는 모름)
+- matchRank : 순위
+- matchRetired : 골인 여부 (이게 1이면 순위는 99가 됨)
+- matchWin : 승리 여부
+- matchTime : 주행 시간 (예시 : 118150 > 118초 150 (millisecond))
+- teamNo : `0` 개인전, `1` 레드팀, `2` 블루팀

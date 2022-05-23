@@ -1,0 +1,19 @@
+gender 성별(f/m) 
+car 차량 소유 (y/n)
+reality 부동산 소유 여부(y/n)
+child_num 자녀 수
+income_total 연간 소득
+income_type 소득 분류
+edu_type 교육 수준
+family_type 결혼 여부
+house_type 생활방식
+days_birth (데이터수집당일로부터 며칠전 생일인지)
+days_employed (데이터수집당일로부터 며칠전 업무 시작했는지)
+flag_mobil 핸드폰 소유여부(y/n)
+work_phone 업무용 전화 소유 여부 (y/n)
+phone 전화 소유 여부(y/n)
+email 이메일 소유 여부 (y/n)
+occyp_type 직업 유형
+family_size 가족 규모
+begin_month (데이터 수집당일로부터 몇달 전 신용카드발급 받았는지)
+credit 1 높음 0 낮음
