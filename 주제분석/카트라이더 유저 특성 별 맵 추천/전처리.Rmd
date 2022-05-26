@@ -1,0 +1,87 @@
+---
+title: "전처리"
+author: "이선민"
+output: html_document
+---
+#데이터 불러오기
+```{r}
+setwd("C:\\Users\\user\\Desktop\\3-2\\P-SAT\\주제분석\\데이터")
+library("dplyr")
+library("tidyverse")
+library("jsonlite")
+library("rjson")
+
+data<-read.csv("data.csv", na.strings = c("", "NA"))
+data_mt<-separate(data, col=matchType, sep = " ", into = c("a","b"))
+data_mt1<-data_mt
+character = jsonlite::fromJSON('character.json')
+flying_pet = jsonlite::fromJSON('flyingPet.json')
+pet = jsonlite::fromJSON('pet.json')
+kart = jsonlite::fromJSON('kart.json')
+```
+
+#고유코드 이름 연결하기
+```{r}
+data_mt <- left_join(data_mt, character, by = c("character" = "id"))
+data_mt <- left_join(data_mt, flying_pet, by = c("flyingPet" = "id"))
+data_mt <- left_join(data_mt, kart, by = c("kart" = "id"))
+data_mt <- left_join(data_mt, pet, by=c("pet" = "id"))
+```
+
+#불필요한 열 삭제하기
+```{r}
+data_mt <- subset(data_mt, select = -c(character, flyingPet, pet, kart))
+str(data_mt)
+data_mt<-data_mt[,c()]
+names(data_mt)[names(data_mt) == "name.x"] <- c("character") 
+names(data_mt)[names(data_mt) == "name.y"] <- c("flyingPet") 
+names(data_mt)[names(data_mt) == "name.x.x"] <- c("kart") 
+names(data_mt)[names(data_mt) == "name.y.y"] <- c("pet") 
+```
+
+#한국 표준 시간으로 바꾸고, 플레이 시간대 파생 변수 추가
+```{r}
+time<-data_mt$startTime
+time2 <- data_mt$endTime
+
+library('lubridate')
+time<-as.POSIXct(time)
+time2<-as.POSIXct(time2)
+time<-time + hours(9)
+time2<-time2 + hours(9)
+
+playTimeZone <- ifelse(hour(time) >= 0 & hour(time) < 6, "새벽",
+                   ifelse(hour(time) >= 6 & hour(time) < 12, "오전",
+                          ifelse(hour(time) >= 12 & hour(time) < 18, "낮", "저녁")))
+
+n_distinct(playTimeZone)
+
+data_mt<-cbind(data_mt, playTimeZone)
+
+time <- as.data.frame(time)
+time2<- as.data.frame(time2)
+data_mt$startTime <- time
+data_mt$endTime <- time2
+str(data_mt)
+```
+
+#matchTime
+```{r}
+library(stringr)
+matchTime <- as.character(data_mt$matchTime)
+matchTime_sec <- substr(matchTime, 1, nchar(matchTime)-3)
+matchTime_ms <- substr(matchTime, nchar(matchTime_sec)+1, nchar(matchTime))
+matchTime_sec<-as.data.frame(matchTime_sec)
+matchTime_ms <- as.data.frame(matchTime_ms)
+data_mt<-cbind(data_mt, matchTime_sec, matchTime_ms)
+data_mt <- subset(data_mt, select = -c(matchTime))
+```
+
+#스개/스팀/아개/아팀
+```{r}
+data_mt$Speed_Item <- ifelse(data_mt$a=="스피드", 1,0)
+data_mt$Indi_Team <-ifelse(data_mt$b=="팀전", 1, 0)
+data_mt <- subset(data_mt, select = -c(a,b))
+str(data_mt)
+data_mt<-data_mt[,c(1:3,25,26,8, 24,4:7,27,28,9:23)]
+```
